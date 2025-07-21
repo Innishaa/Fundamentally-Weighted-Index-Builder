@@ -1,20 +1,108 @@
+import pandas as pd
+
 import numpy as np
 
-def calculate_daily_returns(price_df):
-    return price_df.pct_change().dropna()
+import matplotlib.pyplot as plt
+from src.data_utils import compute_fundamental_scores, get_sector_matrix
+def backtest_portfolio(prices, weight_fn, rebalance_freq='ME'):
 
-def compute_statistics(portfolio_returns):
-    cumulative_return = (1 + portfolio_returns).prod() - 1
-    annual_volatility = portfolio_returns.std() * np.sqrt(252)
-    sharpe_ratio = (portfolio_returns.mean() * 252) / (portfolio_returns.std() * np.sqrt(252))
+    rets = prices.pct_change().dropna()
+
+    weights = {}
+
+    portfolio_returns = []
+
+    for date in rets.resample(rebalance_freq).first().index:
+
+        try:
+
+            sub_prices = prices.loc[:date].dropna()
+
+            latest = sub_prices.iloc[-1]
+
+            past = sub_prices.iloc[-21:]
+
+            scores = compute_fundamental_scores(latest)  # define in data_utils
+
+            sector_matrix = get_sector_matrix(latest.index)  # define in data_utils
+
+            w = weight_fn(scores, sector_matrix)
+
+            weights[date] = w
+
+            future_returns = rets.loc[date:date + pd.DateOffset(days=30)].copy()
+
+            pf_returns = (future_returns @ w).dropna()
+
+            portfolio_returns.append(pf_returns)
+
+        except Exception as e:
+
+            print(f"Skipped {date}: {e}")
+
+            continue
+
+    return pd.concat(portfolio_returns), weights
+
+def calculate_performance(portfolio_returns):
+
+    cumulative_return = (1 + portfolio_returns).cumprod()
+
+    cagr = (cumulative_return.iloc[-1]) ** (252 / len(portfolio_returns)) - 1
+
+    volatility = np.std(portfolio_returns) * np.sqrt(252)
+
+    sharpe_ratio = cagr / volatility
+
+    drawdown = cumulative_return / cumulative_return.cummax() - 1
+
+    max_drawdown = drawdown.min()
 
     return {
-        "Cumulative Return": cumulative_return,
-        "Annual Volatility": annual_volatility,
-        "Sharpe Ratio": sharpe_ratio
+
+        "CAGR": round(cagr, 4),
+
+        "Volatility": round(volatility, 4),
+
+        "Sharpe Ratio": round(sharpe_ratio, 4),
+
+        "Max Drawdown": round(max_drawdown, 4)
+
     }
 
-def simulate_portfolio(price_df, weights):
-    daily_returns = calculate_daily_returns(price_df)
-    portfolio_returns = daily_returns @ weights
-    return portfolio_returns
+def calculate_turnover(weights_dict):
+
+    dates = sorted(weights_dict.keys())
+
+    turnover = []
+
+    for i in range(1, len(dates)):
+
+        w_prev = weights_dict[dates[i - 1]]
+
+        w_curr = weights_dict[dates[i]]
+
+        turnover.append(np.sum(np.abs(w_curr - w_prev)))
+
+    return np.mean(turnover)
+
+def plot_returns(portfolio_returns, benchmark_returns=None):
+
+    cumulative = (1 + portfolio_returns).cumprod()
+
+    plt.figure(figsize=(10, 6))
+
+    plt.plot(cumulative, label='Fundamental Index')
+
+    if benchmark_returns is not None:
+
+        plt.plot((1 + benchmark_returns).cumprod(), label='Benchmark')
+
+    plt.legend()
+
+    plt.title("Cumulative Returns")
+
+    plt.grid(True)
+
+    plt.show()
+ 

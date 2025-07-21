@@ -3,7 +3,8 @@ import cvxpy as cp
 import numpy as np
 
 def optimize_weights(expected_returns, covariance_matrix, max_weight=0.6):
-
+    # Ensure covariance_matrix is symmetric
+    covariance_matrix = 0.5 * (covariance_matrix + covariance_matrix.T)
     n = len(expected_returns)
 
     weights = cp.Variable(n)
