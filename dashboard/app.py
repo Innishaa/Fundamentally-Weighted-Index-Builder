@@ -1,5 +1,7 @@
 import sys
 import os
+import matplotlib.pyplot as plt
+import numpy as np
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import streamlit as st
@@ -81,13 +83,9 @@ elif data_source == "Use yfinance":
     import yfinance as yf
 
     tickers_input = st.text_input("Enter tickers separated by space (e.g., AAPL MSFT GOOGL)")
-
     start_date = st.date_input("Start Date")
-
     end_date = st.date_input("End Date")
-
     if st.button("Fetch from yfinance"):
-
         tickers = tickers_input.upper().split()
 
         data = yf.download(tickers, start=start_date, end=end_date)['Adj Close']
@@ -99,7 +97,6 @@ elif data_source == "Use yfinance":
             prices = data.dropna(axis=1)
 
         st.write("Fetched Data:")
-
         st.dataframe(prices.tail())
 
 elif data_source == "Use Financial Modeling Prep API":
@@ -107,37 +104,24 @@ elif data_source == "Use Financial Modeling Prep API":
     import requests
 
     api_key = st.text_input("Enter your FMP API Key", type="password")
-
     tickers_input = st.text_input("Enter tickers separated by comma (e.g., AAPL,MSFT,GOOGL)")
 
     start_date = st.date_input("Start Date")
-
     end_date = st.date_input("End Date")
 
     if st.button("Fetch from FMP"):
-
         tickers = tickers_input.upper().split(',')
-
         dfs = []
 
         for ticker in tickers:
-
             url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?from={start_date}&to={end_date}&apikey={api_key}"
-
             r = requests.get(url)
-
             data = r.json()
-
             try:
-
                 hist = pd.DataFrame(data['historical'])
-
                 hist['date'] = pd.to_datetime(hist['date'])
-
                 hist.set_index('date', inplace=True)
-
                 close_prices = hist[['close']].rename(columns={'close': ticker})
-
                 dfs.append(close_prices)
 
             except:
@@ -159,7 +143,8 @@ if prices is not None:
 
     # Pivot to wide format for backtesting
     prices_wide = prices.pivot(index="Date", columns="Ticker", values="Close")
-
+    st.write(prices_wide.head())
+    st.write(prices_wide.info())
 
     tickers = prices['Ticker'].unique().tolist()
     fundamentals= pd.read_csv("data/dummy_fundamentals.csv") 
@@ -172,25 +157,48 @@ if prices is not None:
         st.stop()
 
     if fundamentals is not None:
-        scores = fundamentals.loc[tickers].dropna()
+        selected_fundamentals = fundamentals.loc[tickers].dropna()
+        scores_array = compute_fundamental_scores(selected_fundamentals)
+        # Wrap scores_array into a DataFrame
+        scores_df = pd.DataFrame({
+            "Ticker": selected_fundamentals.index,
+            "Score": scores_array
+        }).set_index("Ticker")
     else:
-        scores = compute_fundamental_scores(tickers)
+        scores_array = compute_fundamental_scores(pd.DataFrame({'Ticker': tickers}))
+        scores_df = pd.DataFrame({
+            "Ticker": tickers,
+            "Score": scores_array
+        }).set_index("Ticker")
 
-    sector_matrix = get_sector_matrix(tickers)
+    # Select top N tickers (for example, top 3 by score)
+    top_n = 3
+    top_tickers = scores_df.sort_values(by="Score", ascending=False).index[:top_n].tolist()
+
+    # Filter prices_wide and scores to only top tickers
+    prices_wide_selected = prices_wide[top_tickers]
+    scores_selected = scores_df.loc[top_tickers]
+
+    # Also, ensure sector_matrix is for top tickers
+    sector_matrix_selected = get_sector_matrix(top_tickers)
 
     def weight_fn(scores, sector_matrix):
-        return optimize_weights(scores, sector_matrix, max_weight=max_weight, sector_cap=sector_cap)
-
+        # Ensure sector_matrix is symmetric
+        sector_matrix = 0.5 * (sector_matrix + sector_matrix.T)
+        # Make sector_matrix positive semidefinite
+        min_eig = np.min(np.linalg.eigvals(sector_matrix))
+        if min_eig < 0:
+            sector_matrix += np.eye(sector_matrix.shape[0]) * (-min_eig + 1e-8)
+        return optimize_weights(scores, sector_matrix, max_weight=max_weight)
 
     if st.button("Run Backtest"):
         with st.spinner("Running backtest..."):
-            
-                pf_returns, weights_dict = backtest_portfolio(prices_wide, weight_fn=weight_fn, rebalance_freq='M')
+                pf_returns, weights_dict = backtest_portfolio(prices_wide_selected, weight_fn=weight_fn, rebalance_freq='D')
                 metrics = calculate_performance(pf_returns)
                 turnover = calculate_turnover(weights_dict)
 
                 index_values=backtest(prices,combined_data)
-                benchmark=load_indxx_500()
+                benchmark= uploaded_index500()
                 comparison_df=align_with_benchmark(index_values, benchmark)
                 
                 st.subheader("Backtest Performance Stats")
@@ -202,5 +210,5 @@ if prices is not None:
                 st.metric("Average Turnover", f"{turnover:.2f}")
 
                 st.write("**Cumulative Return Chart**")
-                fig = plot_returns(pf_returns)
+                fig = plot_returns(pf_returns, benchmark_returns=benchmark)
                 st.pyplot(fig)

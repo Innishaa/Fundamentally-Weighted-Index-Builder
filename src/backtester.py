@@ -4,7 +4,7 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 from src.data_utils import compute_fundamental_scores, get_sector_matrix
-def backtest_portfolio(prices, weight_fn, rebalance_freq='ME'):
+def backtest_portfolio(prices, weight_fn, rebalance_freq='D'):
 
     rets = prices.pct_change().dropna()
 
@@ -17,6 +17,9 @@ def backtest_portfolio(prices, weight_fn, rebalance_freq='ME'):
         try:
 
             sub_prices = prices.loc[:date].dropna()
+            if len(sub_prices) < 21:
+                print(f"Skipped {date}: Not enough data points for backtest.")
+                continue
 
             latest = sub_prices.iloc[-1]
 
@@ -29,20 +32,35 @@ def backtest_portfolio(prices, weight_fn, rebalance_freq='ME'):
             w = weight_fn(scores, sector_matrix)
 
             weights[date] = w
-
-            future_returns = rets.loc[date:date + pd.DateOffset(days=30)].copy()
+            future_window= rets.loc[date:]
+            if len(future_window) < 5:
+                print(f"Skipped {date}: Not enough future data points for backtest.")
+                continue
+            future_returns =future_window.iloc[:30]
 
             pf_returns = (future_returns @ w).dropna()
+            if pf_returns.empty:
+                print(f"Skipped {date}: No returns data available.")
+                continue
 
             portfolio_returns.append(pf_returns)
 
+            
+
         except Exception as e:
-
-            print(f"Skipped {date}: {e}")
-
+            #if 'weights' in locals() and (weights is None or len(weights) == 0):
+            print(f"Skipped {date}: No weights generated.")
             continue
 
+    if len(portfolio_returns) == 0:
+        raise ValueError("Backtest failed: No portfolio returns to concatenate.")
+
+    # elif portfolio_returns:
     return pd.concat(portfolio_returns), weights
+    # else:
+    #     print("No portfolio returns to concatenate.")
+    #     return pd.Series(dtype=float), weights
+    
 
 def calculate_performance(portfolio_returns):
 
